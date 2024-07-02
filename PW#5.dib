@@ -20,15 +20,15 @@
 ## Задание.
 Реализовать приложение Ping-Pong.
 
-Создать дав потока, каждый из которых в цикле читает данные из BlockingCollection<Message>. После того, как поток прочитал объект из очереди, вызвал его метод Handle(), он создает новый объект класса Message и записывает его в очередь другого потока. Каждый поток всего должен обработать 100 сообщений.
+Создать два потока, каждый из которых в цикле читает данные из BlockingCollection<Message>. После того, как поток прочитал объект из очереди, вызвал его метод Handle(), он создает новый объект класса Message и записывает его в очередь другого потока. Каждый поток всего должен обработать 100 сообщений.
 
 **Указание**.
-1. Как запустить процесс обмена объектами Message между потоками? Первый объект Message пишем в очередь одного из потоков прямо из кода, коорый жти потоки стартовал.
+1. Как запустить процесс обмена объектами Message между потоками? Первый объект Message пишем в очередь одного из потоков прямо из кода, коорый эти потоки стартовал.
 2. Не забываем дождаться завершения работы потоков.
 
 #!csharp
 
-#r "nuget: xunit, 2.8.1"
+// #r "nuget: xunit, 2.8.1"
 using System.Threading;
 using Xunit;
 
@@ -61,6 +61,47 @@ var queue1 = new BlockingCollection<Message>(2); //очередь первого
 var queue2 = new BlockingCollection<Message>(2); //очередь второго потока
 
 // Здесь писать решение
+
+Message message1 = new Message();
+queue2.Add(message1);
+
+void ReadQueue1(BlockingCollection<Message> queue)
+{
+    for (int i = 0; i < 100; i++)
+    {
+        Message exited = queue.Take();
+        exited.Handle();
+        
+        Message ObjectForThread2 = new Message();
+        queue2.Add(ObjectForThread2);
+    }       
+    queue2.CompleteAdding();
+}
+
+void ReadQueue2(BlockingCollection<Message> queue)
+{
+    for (int i = 0; i < 100; i++)
+    {
+        Message exited = queue.Take();
+        exited.Handle();
+        
+        Message ObjectForThread1 = new Message();
+        queue1.Add(ObjectForThread1);
+    }       
+    queue1.CompleteAdding();
+}
+
+Thread thread1 = new Thread(() => ReadQueue1(queue1));
+Thread thread2 = new Thread(() => ReadQueue2(queue2));
+
+thread1.Start();
+thread2.Start();
+
+thread1.Join();
+thread2.Join();
+
+Message z = (queue1.Count > 0) ? queue1.Take() : queue2.Take(); 
+// Delete an item added before the thread starts 
 
 #!csharp
 
