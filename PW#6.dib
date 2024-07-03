@@ -1,0 +1,268 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"languageName":"csharp","name":"csharp"}]}}
+
+#!markdown
+
+# Практическая работа №6. Изучение производительности потоко-безопасных очередей.
+
+**Цель:** Определить лучшую потоко-безопасную коллекцию для выполнения интенсивной обработки входящих сообщений.
+
+**Результаты:** После выполнения работы Вы сможете:
+1. Назвать оптимальную коллекцию для обработки большого количества сообщений.
+2. Изучите примтив синхронизации Условная переманная.
+
+
+**Материалы для самостоятельного изучения**.
+1. [Потоко-безопасные коллекции](https://learn.microsoft.com/en-us/dotnet/standard/collections/thread-safe/)
+2. Условные переменные Глава 5 п.5.1. книги Г. Эндрюс Основы многопоточного, параллельного и распределенного программирования
+3. [Одна из реализаций условных переменных на .Net](https://learn.microsoft.com/ru-ru/dotnet/api/system.threading.manualresetevent?view=net-8.0)
+
+## Задание.
+Исслдеовать производительность BlockingCollection и ConcurrentQueue в сравнении с непотокоабезопасной очередью.
+
+Для каждой потоко-безопасной очереди необходимо реализовать 2 потока: один записывает объект в очередь, а другой - читает объект из очереди.
+Для непотокобезопасной очереди реализовать два цикла - записи миллиона объектов в очередь и чтение миллиона объектов из очереди.
+
+Необходимо определить два промежутка времени:
+- время за которое поток или цикл обработает миллион объектов
+- время, необходимое на запись и чтение миллиона объектов из очреди.
+
+Сделать десять замеров по каждой коллекции. Все замеры показать на графике.
+
+Записать в ноутбуке вывод - какая и потоко-безопасных коллекций эффективнее. И выразить в процентах - скорость самой быстрой поток-безопасной коллекции по сравнению с обычной очредью.
+
+**Указание**.
+1. Необходимо исключить из замеров время, необходимое для запуска и остановки потоков, то есть посчитать чистое время, необходимое для обработки объектов.
+Для этого следует использовать условные события, которые позволят убедиться, что оба потока запустились и готовы читать и писать объекты и только потом запускать таймер.
+2. Для итогового вывода сравнивать усредненные значения.
+
+#!markdown
+
+// здесь писать код
+
+#!csharp
+
+// #r "nuget:ScottPlot, 5.0.*"
+using System.Collections.Concurrent;
+using System.Threading;
+using System.Diagnostics;
+using Microsoft.DotNet.Interactive.Formatting;
+Formatter.Register(typeof(ScottPlot.Plot), (p, w) => 
+    w.Write(((ScottPlot.Plot)p).GetImageHtml(400, 300)), HtmlFormatter.MimeType);
+
+
+class Message()
+{
+    public static long TimeEntryQueue1 = 0;
+    public static long TimeReadQueue1 = 0;
+    public static long TimeEntryQueue2 = 0;
+    public static long TimeReadQueue2 = 0;
+    public static long TimeEntryQueue3 = 0;
+    public static long TimeReadQueue3 = 0; 
+
+    public static int id = 0; 
+
+    public void WhoI()
+    {
+        Console.WriteLine($"I am element №{id}");
+        Interlocked.Increment(ref id);
+    }
+    public static double PrintResultsBC()
+    {
+        return TimeEntryQueue1 + TimeReadQueue1; 
+    }
+    public static double PrintResultsCQ()
+    {
+        return TimeEntryQueue2 + TimeReadQueue2; 
+    }
+    public static double PrintResultsQQ()
+    {
+        return TimeEntryQueue3 + TimeReadQueue3; 
+    }
+    public static void ResetProperties()
+    {
+        TimeEntryQueue1 = 0; 
+        TimeReadQueue1 = 0;
+        TimeEntryQueue2 = 0; 
+        TimeReadQueue2 = 0;
+        TimeEntryQueue3 = 0; 
+        TimeReadQueue3 = 0;
+    }
+}
+void EntryQueue3(Queue<Message> queue)
+{
+    Stopwatch swEntry3 = new Stopwatch();
+    swEntry3.Start();
+    for (int i = 0; i < 1000000; i++)
+    {   
+        Message ObjectForQueue1 = new Message();
+        queue.Enqueue(ObjectForQueue1);
+    }
+    swEntry3.Stop();
+    Message.TimeEntryQueue3 += swEntry3.ElapsedMilliseconds;
+
+}
+
+void ReadQueue3(Queue<Message> queue)
+{
+    Stopwatch swRead3 = new Stopwatch();
+    swRead3.Start();
+    for (int i = 0; i < 1000000; i++)
+    {        
+        queue.Dequeue();
+    }
+    swRead3.Stop();
+    Message.TimeReadQueue3 += swRead3.ElapsedMilliseconds;
+}
+////////
+
+void EntryQueue2(ConcurrentQueue<Message> queue)
+{
+    Stopwatch swEntry2 = new Stopwatch();
+    swEntry2.Start();
+    for (int i = 0; i < 1000000; i++)
+    {   
+        Message ObjectForQueue2 = new Message();
+        queue.Enqueue(ObjectForQueue2);
+    }
+    swEntry2.Stop();
+    Interlocked.Add(ref Message.TimeEntryQueue2, swEntry2.ElapsedMilliseconds);
+}
+
+void ReadQueue2(ConcurrentQueue<Message> queue)
+{
+    Stopwatch swRead2 = new Stopwatch();
+    swRead2.Start();
+    for (int i = 0; i < 1000000; i++)
+    {   
+        queue.TryDequeue(out _);
+    }
+    swRead2.Stop();
+    Interlocked.Add(ref Message.TimeReadQueue2, swRead2.ElapsedMilliseconds);
+}
+/////////
+
+void EntryQueue1(BlockingCollection<Message> queue)
+{
+    Stopwatch swEntry1 = new Stopwatch();
+    swEntry1.Start();
+    for (int i = 0; i < 1000000; i++)
+    {        
+        Message ObjectForQueue1 = new Message();
+        queue.Add(ObjectForQueue1);
+    }
+    swEntry1.Stop();
+    Interlocked.Add(ref Message.TimeEntryQueue1, swEntry1.ElapsedMilliseconds);
+    queue.CompleteAdding();       
+}
+
+void ReadQueue1(BlockingCollection<Message> queue)
+{
+    Stopwatch swRead1 = new Stopwatch();
+    swRead1.Start();
+    while (!queue.IsCompleted)
+    {
+        Message element = null;
+        try
+        {
+            element = queue.Take();
+        }
+        catch (InvalidOperationException) { }
+    }
+    swRead1.Stop();
+    Interlocked.Add(ref Message.TimeReadQueue1, swRead1.ElapsedMilliseconds);
+}
+
+////
+double avarageTimeBlockingCollection = 0.0; 
+double[] dataX = new double[10];
+double[] dataY = new double[10];
+
+for (int i = 0; i < 10; i++) 
+{
+    BlockingCollection<Message> queue1 = new BlockingCollection<Message>(2);
+    Thread thread1 = new Thread(() => EntryQueue1(queue1));
+    Thread thread2 = new Thread(() => ReadQueue1(queue1));
+
+    thread1.Start();
+    thread2.Start();
+    thread1.Join();
+    thread2.Join();
+    avarageTimeBlockingCollection += Message.PrintResultsBC();
+    dataX[i] = i;
+    dataY[i] = Message.PrintResultsBC();
+    Message.ResetProperties();
+    
+}
+Console.WriteLine($"Avarage execution time BlockingCollection(Entry/Read): {avarageTimeBlockingCollection / 10}");
+ScottPlot.Plot plt1 = new();
+plt1.Add.Scatter(dataX, dataY);
+plt1
+
+#!csharp
+
+double avarageTimeConcurrentQueue = 0.0; 
+double[] dataX_2 = new double[10];
+double[] dataY_2 = new double[10];
+
+for (int i = 0; i < 10; i++) 
+{
+    ConcurrentQueue<Message> queue2 = new ConcurrentQueue<Message>();
+    Thread thread3 = new Thread(() => EntryQueue2(queue2));
+    Thread thread4 = new Thread(() => ReadQueue2(queue2));
+
+    thread3.Start();
+    thread4.Start();
+    thread3.Join();
+    thread4.Join();
+    avarageTimeConcurrentQueue += Message.PrintResultsCQ();
+    dataX_2[i] = i;
+    dataY_2[i] = Message.PrintResultsCQ();
+    Message.ResetProperties();
+}
+Console.WriteLine($"Avarage execution time ConcurrentQueue(Entry/Read): {avarageTimeConcurrentQueue / 10}");
+ScottPlot.Plot plt2 = new();
+plt2.Add.Scatter(dataX_2, dataY_2);
+plt2
+
+#!csharp
+
+double avarageTimeQueue = 0.0; 
+double[] dataX_3 = new double[10];
+double[] dataY_3 = new double[10];
+
+for (int i = 0; i < 10; i++)
+{
+    Queue<Message> queue3 = new Queue<Message>(1000000);
+    EntryQueue3(queue3);
+    ReadQueue3(queue3);
+    dataX_3[i] = i; 
+    dataY_3[i] = Message.PrintResultsQQ();
+    avarageTimeQueue += Message.PrintResultsQQ();
+    Message.ResetProperties();
+}
+Console.WriteLine($"Avarage execution time Queue(Entry/Read): {avarageTimeQueue / 10}");
+ScottPlot.Plot plt3 = new();
+plt3.Add.Scatter(dataX_3, dataY_3);
+plt3
+
+#!markdown
+
+## Вывод
+
+#!csharp
+
+string result = avarageTimeConcurrentQueue < avarageTimeBlockingCollection ? "ConcurrentQueue": "BlockingCollection";
+double ResultTime = avarageTimeConcurrentQueue < avarageTimeBlockingCollection ? avarageTimeConcurrentQueue: avarageTimeBlockingCollection;
+
+Console.WriteLine($"the fastest flow-safe queue is {result}");
+
+if (ResultTime < avarageTimeQueue)
+{
+    Console.WriteLine($"The {result} is {(avarageTimeQueue - ResultTime) / avarageTimeQueue * 100}% faster than simple queue");
+} 
+else
+{
+    Console.WriteLine($"The simple queue is {(ResultTime - avarageTimeQueue) / ResultTime * 100}% faster than {result}");
+}
