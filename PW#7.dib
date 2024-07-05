@@ -17,9 +17,215 @@
 
 #!csharp
 
+using System.Collections.Concurrent;
+using System.Threading;
+
 public interface ICommand
 {
-    void Execute();
+    byte Execute();
+}
+
+class ServerThread 
+{   
+    private BlockingCollection<ICommand> queue;
+    public static BlockingCollection<ICommand> queue_2;
+    private int ThreadNumber;
+    private int LocalIndex;
+    
+    public ServerThread(BlockingCollection<ICommand> queue_, int LocalIndex_)
+    {
+        this.queue = queue_;
+        this.LocalIndex = LocalIndex_;
+    }
+
+    public bool ExceptionHandlerHard(HardStop el, int id)
+    {
+        if (el.ReturnChooiseFlow() == id)
+        {
+            return true; 
+        }
+        else
+        {
+            return false; 
+        } 
+    }
+
+    public bool ExceptionHandlerSoft(SoftStop el, int id)
+    {
+        if (el.ReturnChooiseFlow() == id)
+        {
+            return true;
+        }
+        else
+        {
+            return false; 
+        }
+    }
+    
+    public static void CompleteAddQueue()
+    {
+        queue_2.CompleteAdding();
+    }
+
+    public void ServerStart_2()
+    {
+        CancellationTokenSource cts = new CancellationTokenSource();
+        CancellationToken token = cts.Token;
+        byte error = 0; 
+        while (!queue_2.IsCompleted)
+        {
+            if (token.IsCancellationRequested)
+            {
+                Console.WriteLine("Exception!");
+                if (error == 1)
+                {
+                    Console.WriteLine("Command HardStop in the wrong thread");
+                }
+                else
+                {
+                    Console.WriteLine("Command SoftStop in the wrong thread");
+                }
+                break;
+            }
+            ICommand element = null;
+            try
+            {
+                element = queue_2.Take();
+                element.Execute();  
+            }
+            catch (InvalidOperationException) { }
+            
+            if (element is HardStop)
+            {
+                if (!(ExceptionHandlerHard((HardStop)element, LocalIndex)))
+                {
+                    error = 1;
+                    cts.Cancel();
+                }
+                else
+                {
+                    break;
+                }
+            }
+            else if (element is SoftStop)
+            {
+                if (!(ExceptionHandlerSoft((SoftStop)element, LocalIndex)))
+                {
+                    error = 2;
+                    cts.Cancel();
+                }
+            }
+            Thread.Sleep(100);
+        }
+        Console.WriteLine($"Queue is over, thread №{LocalIndex} is ended");
+    }
+    
+    public void ServerStart()
+    {
+        foreach(var element in queue)
+        {
+            byte command = element.Execute();
+            if (command == 2)
+            {
+                Console.WriteLine($"Thread №{ThreadNumber} has been stopped by HardStop command");
+                return; 
+            }
+        }
+        Console.WriteLine($"Thread №{ThreadNumber} has successfully completed");
+        return; 
+    }
+}
+
+class HardStop: ICommand
+{
+    public int ChooiseFlow = 0;
+    public HardStop(int ChooiseFlow_)
+    {
+        this.ChooiseFlow = ChooiseFlow_;
+    }
+    public int ReturnChooiseFlow()
+    {
+        return ChooiseFlow; 
+    }
+    public byte Execute()
+    {
+        Console.WriteLine("HardStop command");
+        return 2; 
+    }
+}
+
+class SoftStop: ICommand
+{
+    public int ChooiseFlow = 0;
+    public SoftStop(int ChooiseFlow_)
+    {
+        this.ChooiseFlow = ChooiseFlow_;
+    }
+    public int ReturnChooiseFlow()
+    {
+        return ChooiseFlow; 
+    }
+    public byte Execute()
+    {
+        Console.WriteLine("Just SoftStop");
+        return 1;
+    }
+}
+
+class Print(): ICommand
+{
+    public byte Execute()
+    {
+        Console.WriteLine("Someting");
+        return 0; 
+    }
+}
+
+
+var queue1 = new BlockingCollection<ICommand>(20); //очередь первого потока
+var queue2 = new BlockingCollection<ICommand>(20); //очередь второго потока
+var queue3 = new BlockingCollection<ICommand>(20); //очередь третьего потока
+
+Print command1 = new Print();
+HardStop command2 = new HardStop(1);
+SoftStop command3 = new SoftStop(1);
+
+// Add commands in queues of flows
+for (int i = 0; i < 5; i++)
+{
+    queue1.Add(command1);
+    queue2.Add(command1);
+    queue3.Add(command1);
+} 
+
+queue1.Add(command2);
+queue2.Add(command3);
+
+for (int i = 0; i < 5; i++)
+{
+    queue1.Add(command1);
+    queue2.Add(command1);
+    queue3.Add(command1);
+}
+
+List<BlockingCollection<ICommand>> queues = new List<BlockingCollection<ICommand>>(3);
+queues.Add(queue1);
+queues.Add(queue2);
+queues.Add(queue3);
+
+int ThreadsNumber = 3; 
+
+Thread[] threads = new Thread[ThreadsNumber];
+
+for (int i = 0; i < ThreadsNumber; i++)
+{
+    ServerThread server = new ServerThread(queues[i], i);
+    threads[i] = new Thread(server.ServerStart);
+    threads[i].Start();
+}
+for (int i = 0; i < ThreadsNumber; i++)
+{
+    threads[i].Join();
 }
 
 #!markdown
@@ -38,3 +244,57 @@ ServerThread может менять свое поведение для обра
 Отсутствие Команд в очереди потока не должно требовать значительных затрат процессорного времени. Значительными считаются затраты, которые зависят от времени простоя потока.
 
 Написать проверку, которая гарантирует правильное выполнение команд HardStop и SoftStop.
+
+#!markdown
+
+## Вывод
+
+#!markdown
+
+Не вижу смысла в команде SoftStop, поток и так останавливается, когда в очереди заканчиваются команды.
+
+Также не понимаю зачем делать исключение, если команды HardStop, SoftStop принадлежат не тому потоку, которому они приназначались, ведь в моем случае изначально дается выбор, к какому потоку будет принадлежать какая-либо команда. Возможно, я не так понял задание и надо было общий список команд разбить на потоки(сделал это ниже), и тогда это бы играло роль.
+
+Ниже реализовал идею одной очереди, которую едят несколько потоков. 
+
+#!csharp
+
+// ServerThread server2 = new ServerThread(queue3, -1);
+
+Print command5 = new Print();
+SoftStop command6 = new SoftStop(0);
+HardStop command7 = new HardStop(5); // HardStop belongs to the fifth flow, but there's only 1 flow. 
+
+int flows = 1; 
+int LimitOfBlockingCollection = 25; 
+
+var queue4 = new BlockingCollection<ICommand>(LimitOfBlockingCollection);
+
+for (int i = 0; i < 10; i++)
+{
+    queue4.Add(command5);
+}
+
+// queue4.Add(command6);
+queue4.Add(command7);
+
+for (int i = 0; i < 10; i++)
+{
+    queue4.Add(command5);
+}
+
+ServerThread.queue_2 = queue4;
+ServerThread.CompleteAddQueue();
+
+Thread[] thrd = new Thread[flows];
+for (int i = 0; i < flows; i++)
+{
+    ServerThread server2 = new ServerThread(queue3, i);
+    thrd[i] = new Thread(server2.ServerStart_2);
+    thrd[i].Start();
+} 
+
+for (int i = 0; i < flows; i++)
+{
+    thrd[i].Join();
+}
