@@ -20,22 +20,157 @@
 
 #!csharp
 
+using System.Collections.Concurrent;
+using System.Threading;
+
 interface ICommand
-{
+{       
     void Execute();
+    int ReturnNumberOfRepetitions();
 }
 
-
-public class TestCommand(int id) : ICommand
+public class TestCommand: ICommand
 {
-    int counter = 0;
+    int NumberOfRepetitions;
+    int id;
+    int counter = 0; 
 
+    public TestCommand(int id_, int NumberOfRepetitions_)
+    {
+        this.id = id_;
+        this.NumberOfRepetitions = NumberOfRepetitions_;
+    }
     public void Execute()
     {
         Console.WriteLine($"Поток {id} вызов {++counter}");
+    }
+    public int ReturnNumberOfRepetitions()
+    {
+        return NumberOfRepetitions;
+    }
+}
+
+class HardStop(): ICommand
+{
+    public void Execute()
+    {
+        Console.WriteLine("HardStop command");
+    }
+    public int ReturnNumberOfRepetitions()
+    {
+        return -1;
     }
 }
 
 #!markdown
 
 Необходимо проиллюстрировать выполнение 5 экземпляров TestCommand 3 раза, затем остановить поток с помощью HardStop.
+
+#!csharp
+
+// Если коллекция становится пустой, то потоки-потребители перейдут в состояние блокировки, 
+// пока поток-создатель не добавит хотя бы один элемент. Таким образом поток обработчика,
+// не будет просто так простаивать, а будет блокироваться, если в локальной очереди нету команд.
+// И при этом не будет зависить от потока "Чтения", так что если окажется так, что 
+// глобальная очередь оказалась пуста, а в обработчик закинута команда, то
+// поток Чтения блокируется, а обработчик до конца выполнит команду, затем тоже блокируется,
+// до ввода пользователем новой команды. 
+
+//+ если команда не долгосрочная то выполняется в 
+// глобальной очереди не задействуя при этом поток планирощика, а если попались две команды:
+// одна длительная, другая одиночная, то в глобальной очереди будет выполняться 
+// одиночная команда а в планировщике длительная, параллельно в двух потоках. 
+
+
+class ServerThread()
+{   
+    private BlockingCollection<ICommand> queue = new BlockingCollection<ICommand>(1000);
+    private BlockingCollection<ICommand> LocalQueue = new BlockingCollection<ICommand>(1000);
+    public void ReadQueue() 
+    {
+        CancellationTokenSource cts = new CancellationTokenSource();
+        CancellationToken token = cts.Token;
+        while (!queue.IsCompleted)
+        {
+            ICommand element = null;
+            try 
+            {
+                element = queue.Take();
+                int LimitLocalQueue = element.ReturnNumberOfRepetitions(); 
+                if (LimitLocalQueue > 1)
+                {
+                    for (int i = 0; i < LimitLocalQueue; i++)
+                    {
+                        LocalQueue.Add(element);
+                    }
+                }
+                else if (LimitLocalQueue == -1)
+                {
+                    element.Execute();
+                    cts.Cancel();
+                }
+                else
+                {
+                    element.Execute();
+                }
+            }
+            catch (InvalidOperationException) { }
+            if (token.IsCancellationRequested)
+            {
+                Console.WriteLine("thread stop by HardStop");
+                break;
+            }
+            Thread.Sleep(150);
+        }
+        LocalQueue.CompleteAdding();
+    }
+
+    public void Scheduler()
+    {
+        while (!LocalQueue.IsCompleted)
+        {
+            ICommand element = null;
+            try
+            {
+                element = LocalQueue.Take();
+                element.Execute();
+            }
+            catch (InvalidOperationException) { }
+            Thread.Sleep(200);
+        }
+    }
+
+    public void EntryQueue()
+    {
+        for (int i = 0; i < 5; i++)
+        {
+            int NumberOfCallsPerCommand = 3;
+            TestCommand command1 = new TestCommand(1, NumberOfCallsPerCommand);
+            queue.Add(command1);
+        }
+        HardStop commandStop = new HardStop();
+        queue.Add(commandStop);
+
+        TestCommand command3 = new TestCommand(5, 1);
+        TestCommand command4 = new TestCommand(5, 2);
+        queue.Add(command3);
+        queue.Add(command4);
+        
+        queue.CompleteAdding();
+        Thread.Sleep(100);
+    }
+}
+
+ServerThread server = new ServerThread();
+
+Thread thread1 = new Thread(server.EntryQueue);
+Thread thread2 = new Thread(server.ReadQueue);
+Thread thread3 = new Thread(server.Scheduler);
+
+thread1.Start();
+thread2.Start();
+thread3.Start();
+
+thread1.Join();
+thread2.Join();
+thread3.Join();
