@@ -1,0 +1,228 @@
+#!meta
+
+{"kernelInfo":{"defaultKernelName":"csharp","items":[{"aliases":[],"languageName":"csharp","name":"csharp"}]}}
+
+#!markdown
+
+# Практическая работа №10. Доставка сообщений до Команды.
+
+**Цель:** Предоставить возможность обмена данными для длительных операций.
+
+**Результаты:** После выполнения работы Вы сможете:
+1. Отправлять сообщения длительной операции.
+
+## Задание.
+Поскольку длительная операция выполняется в течение некоторого момента времени, то может возникнуть необходимость
+в предоставлении дополнительной информации, влияющей на ход выполнения. Поскольку Команды и источник данных часто находятся в разных потоках,
+то сделать это надо потоко-безопасным образом. Самый простой способ - используя идиому Производитель-Поребитель, в нашем случае - очередь.
+
+Набор данных, предназначенных для Команды будем называть сообщением. Можно использовать любую подходящую конструкцию языка программирования для 
+представления сообщения. Необходимо учесть, что скорость доставки сообщений может быть выше, чем скорость обработки, а значит очередь сообщений должна быть
+у каждой Длительной операции. При этом потоко-безопасные очереди требуют системных ресурсов, а значит, чтобы не получить ограничение на максимальное количество
+одновремнно работающих длительных Команд, нельзя использовать потоко-безопасные очереди. 
+
+Возможный вариант реализации - оставить одну потоко-безопасную очередь для потока, а для Команд использовать обычные очереди. Осталось только решить, как сообщение
+излеченное из очереди потока попадет в очередь Команды. Один из возможных вариантов:
+1. Каждая команда имеет уникальный идентификатор.
+2. Сообщение содержит уникальный идентификатор Команлды, которому оно адресовано.
+3. Для потока создаем специальную Длительную Команду, которая назвается Роутером. Он хранит коллекцию пар (id Команды, ссылка на очередь Команды). При вызове метода Execute этой 
+Роутера, если очередь потока не пуста, происходит чтение очередного сообщения и по id Команды определяется очередь, куда это сообщение записывается.
+Если id Команды не определен, на консоль выводится сообщение о невозможности доставить сообщение неизвестному адресату.
+При старте новой Команды, ее очередь необходимо добавить в коллекцию Роутера. При остановке Команды - очередь удаляется из коллекции Роутера.
+
+Продемонстрировать работу Роутера на двух Длительных Командах и на отправке сообщения несуществующей Команде.
+
+**Материалы для самостоятельного изучения**.
+1. [Паттерн Сообщение](https://www.enterpriseintegrationpatterns.com/patterns/messaging/Message.html)
+2. [Паттерн Роутер - весь раздел про Роутеры](https://www.enterpriseintegrationpatterns.com/patterns/messaging/MessageRoutingIntro.html)
+3. [Обмен сообщеними](https://www.enterpriseintegrationpatterns.com/patterns/messaging/MessageConstructionIntro.html)
+
+#!csharp
+
+using System.Collections.Concurrent;
+using System.Threading;
+
+public interface ICommand
+{
+    void Execute();
+    int ReturnNumberOfRepetitions(); 
+    int ReturnID();
+}
+
+class ServerThread()
+{   
+    private protected BlockingCollection<ICommand> queue = new BlockingCollection<ICommand>(1000);
+    private protected BlockingCollection<ICommand> LocalQueue = new BlockingCollection<ICommand>(1000);
+    public static BlockingCollection<Message> messages = new BlockingCollection<Message>(1000);
+    public static Dictionary<int, Queue<Message>> RouterCollection = new Dictionary<int, Queue<Message>>();
+
+    public void ReadQueue() 
+    {
+        while (!queue.IsCompleted)
+        {
+            Thread.Sleep(500);
+            ICommand element = null;
+            try
+            {
+                element = queue.Take();
+                int LimitLocalQueue = element.ReturnNumberOfRepetitions(); 
+                for (int i = 0; i < LimitLocalQueue; i++)
+                {
+                    LocalQueue.Add(element);
+                }
+            }
+            catch (InvalidOperationException) { }
+        }
+        LocalQueue.CompleteAdding();
+    }
+
+    public void Scheduler()
+    {
+        while (!LocalQueue.IsCompleted)
+        {
+            Thread.Sleep(200);
+            ICommand element = null;
+            try
+            {
+                element = LocalQueue.Take();
+                element.Execute();
+
+                int ID = element.ReturnID();
+                if (RouterCollection.ContainsKey(ID))
+                {
+                    foreach (var mess in RouterCollection[ID])
+                    {
+                        mess.DataForCommand();
+                    }
+                }
+                RouterCollection.Remove(ID);
+            }
+            catch (InvalidOperationException) { }
+        }
+    }
+
+    public void EntryMessages()
+    {
+        for (int i = 0; i < 2; i++)
+        {
+            Thread.Sleep(100); 
+            Message message = new Message(i);
+            messages.Add(message);
+        }
+        Message MessageWithErrorId = new Message(99);
+        messages.Add(MessageWithErrorId);
+
+        messages.CompleteAdding();
+    }
+
+    public void EntryQueue()
+    {
+        Router RouterCommand = new Router(1);
+        queue.Add(RouterCommand);
+        for (int i = 0; i < 2; i++)
+        {
+            Thread.Sleep(100);
+            int NumberOfCallsPerCommand = 3;
+
+            Queue<Message> per = new Queue<Message>();
+            ServerThread.RouterCollection.Add(i, per);
+
+            Print command1 = new Print(NumberOfCallsPerCommand, i);
+            queue.Add(command1);
+        }
+        queue.CompleteAdding();
+    }
+}
+
+class Print: ICommand
+{
+    private int NumberOfRepetitions; 
+    private int id;
+
+    public Print(int NumberOfRepetitions_, int id_)
+    {
+        this.NumberOfRepetitions =  NumberOfRepetitions_;
+        this.id = id_;
+    }
+    public void Execute()
+    {
+        Console.WriteLine($"Complete Print command, id: {id}");
+    } 
+    public int ReturnNumberOfRepetitions()
+    {
+        return NumberOfRepetitions;
+    }
+    public int ReturnID()
+    {
+        return id;
+    }
+}
+
+class Router: ICommand
+{
+    private int NumberOfRepetitions; 
+
+    public Router(int NumberOfRepetitions_)
+    {
+        this.NumberOfRepetitions =  NumberOfRepetitions_;
+    }
+    public void Execute()
+    {
+        Console.WriteLine("Command: Router");
+        foreach(var element in ServerThread.messages)
+        {
+            int ID = element.ReturnID();
+            if (ServerThread.RouterCollection.ContainsKey(ID))
+            {
+                ServerThread.RouterCollection[ID].Enqueue(element);
+            }
+            else
+            {
+                Console.WriteLine($"Message cannot be delivered, id: {ID}");
+            }
+            Message DeleteElement = ServerThread.messages.Take();
+        }
+    } 
+    public int ReturnNumberOfRepetitions()
+    {
+        return NumberOfRepetitions;
+    }
+    public int ReturnID()
+    {
+        return 0; 
+    }
+}
+
+class Message
+{
+    private int id; 
+    public Message(int id_)
+    {
+        this.id = id_;
+    }
+    public void DataForCommand()
+    {
+        Console.WriteLine($"Message id: {id}, for command: {id}");
+    }
+    public int ReturnID()
+    {
+        return id;
+    }
+}
+
+ServerThread server = new ServerThread();
+
+Thread thread0 = new Thread(server.EntryMessages);
+Thread thread1 = new Thread(server.EntryQueue);
+Thread thread2 = new Thread(server.ReadQueue);
+Thread thread3 = new Thread(server.Scheduler);
+
+thread0.Start();
+thread1.Start();
+thread2.Start();
+thread3.Start();
+
+thread0.Join();
+thread1.Join();
+thread2.Join();
+thread3.Join();
