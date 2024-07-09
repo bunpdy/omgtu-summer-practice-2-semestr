@@ -52,7 +52,7 @@ class DefiniteIntegral
 
 #!csharp
 
-#r "nuget: xunit, 2.8.1"
+// #r "nuget: xunit, 2.8.1"
 
 using Xunit;
 
@@ -64,3 +64,193 @@ Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, X, 1e-4, 2), 1e-4);
 Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, SIN, 1e-5, 8), 1e-4);
 
 Assert.Equal(10, DefiniteIntegral.Solve(0, 5, X, 1e-6, 8), 1e-5);
+
+#!csharp
+
+// #r "nuget: xunit, 2.8.1"
+
+using System;
+using System.Threading;
+using Xunit;
+
+var X = (double x) => x;
+var SIN = (double x) => Math.Sin(x);
+
+class DefiniteIntegral
+{
+    public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
+    {
+        Thread[] threads = new Thread[threadsnumber];
+
+        double summ = 0.0;
+        double PartOfFlow = (b - a) / threadsnumber;
+
+        for (int j = 0; j < threadsnumber; j++)
+        {
+            int localJ = j;
+            threads[j] = new Thread (delegate ()
+            {
+                double initialValue, computedValue, area;
+                for (double i = (a + (localJ * PartOfFlow))/step; i < (a + ((localJ + 1) * PartOfFlow))/step; i++)
+                {
+                    area = ((function(i*step) + function((i + 1)*step)) / 2) * step;
+                    do
+                    {
+                        initialValue = summ;
+                        computedValue = initialValue + area;
+                    } while (Interlocked.CompareExchange(ref summ, computedValue, initialValue) != initialValue);
+                }
+            });
+        }
+        for (int i = 0; i < threadsnumber; i++)
+        {
+            threads[i].Start();
+        }
+        for (int i = 0; i < threadsnumber; i++)
+        {
+            threads[i].Join();
+        }
+        return summ;
+    }
+}
+
+Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, X, 1e-4, 2), 1e-4);
+
+Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, SIN, 1e-5, 8), 1e-4);
+
+Assert.Equal(50, DefiniteIntegral.Solve(0, 10, X, 1e-6, 8), 1e-5);
+
+#!csharp
+
+// #r "nuget:ScottPlot, 5.0.*"
+using System;
+using System.Threading;
+using System.Diagnostics;
+
+using Microsoft.DotNet.Interactive.Formatting;
+Formatter.Register(typeof(ScottPlot.Plot), (p, w) => 
+    w.Write(((ScottPlot.Plot)p).GetImageHtml(400, 300)), HtmlFormatter.MimeType);
+
+var SIN = (double x) => Math.Sin(x);
+var X = (double x) => x;
+
+class DefiniteIntegral
+{
+    public static double SolveSingleFlow(double a, double b, Func<double, double> function, double step)
+    {
+        double summ = 0.0;
+        double start = a/step;
+        double end = b/step;
+
+        for (double i = start; i < end; i++)
+        {
+            summ += ((function(i * step) + function((i + 1) * step)) / 2) * step;
+        }
+        return summ;
+    }
+
+    public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
+    {
+        double PartOfFlow = (b - a) / threadsnumber;
+        double[] parts = new double[threadsnumber];
+
+        Parallel.For(0, threadsnumber, new ParallelOptions { MaxDegreeOfParallelism = threadsnumber }, j =>
+        {
+            double localsumm = 0.0;
+            double start = (a + j * PartOfFlow)/step;
+            double end = (a + (j + 1) * PartOfFlow)/step;
+
+            for (double i = start; i < end; i++)
+            {
+                double area = ((function(i*step) + function((i + 1)*step)) / 2) * step;
+                localsumm += area;
+            }
+            parts[j] = localsumm;
+            // if use Interlocked.Exchange, then single-flow method better miltiflow method :( 
+            // And I use Parallel.For for more optimization
+        });
+        double summ = 0.0;
+        for (int i = 0; i < threadsnumber; i++)
+        {
+            summ += parts[i];
+        }
+        return summ;
+    }
+}
+
+// collection statistics of the single-flow function 
+
+long ResultOfSingleFlow = 0;
+
+for (int i = 0; i < 30; i++)
+{
+    Stopwatch stopWatch = new Stopwatch();
+    stopWatch.Start();
+    DefiniteIntegral.SolveSingleFlow(-100, 100, SIN, 1e-3);
+    stopWatch.Stop();
+    ResultOfSingleFlow += stopWatch.ElapsedMilliseconds;
+}
+
+ResultOfSingleFlow /= 30;
+
+// collection staristics of the multiflow function 
+
+long[] dataX = new long[33];
+int[] dataY = new int[33];
+long TheBestResultTimeMultiFlow = 1000;
+int TheBestNumberOfFlows = -1; 
+
+for (int i = 2; i < 33; i++)
+{
+    long time = 0; 
+    for (int j = 0; j < 30; j++)
+    {
+        Stopwatch stopWatch = new Stopwatch();
+        stopWatch.Start();
+        DefiniteIntegral.Solve(-100, 100, SIN, 1e-3, i);
+        stopWatch.Stop();
+        time += stopWatch.ElapsedMilliseconds;
+    }
+    dataY[i] = i;
+    dataX[i] = time/30;
+    if (time/30 < TheBestResultTimeMultiFlow)
+    {
+        TheBestResultTimeMultiFlow = time/30;
+        TheBestNumberOfFlows = i;
+    }
+}
+
+ScottPlot.Plot plt = new();
+plt.Add.Scatter(dataY, dataX);
+// display the plot *at the bottom are the flows (OX) and at the left (OY) are the times 
+plt
+
+#!markdown
+
+## Summary
+
+#!csharp
+
+Console.WriteLine(DefiniteIntegral.Solve(0, 10, X, 1e-1, 2) + " step: 1e-1");
+Console.WriteLine(DefiniteIntegral.Solve(0, 10, X, 1e-2, 2) + " step: 1e-2");
+Console.WriteLine(DefiniteIntegral.Solve(0, 10, X, 1e-3, 2) + " step: 1e-3");
+Console.WriteLine(DefiniteIntegral.Solve(0, 10, X, 1e-4, 2) + " step: 1e-4");
+Console.WriteLine(DefiniteIntegral.Solve(0, 10, X, 1e-5, 2) + " step: 1e-5");
+Console.WriteLine(DefiniteIntegral.Solve(0, 10, X, 1e-6, 2) + " step: 1e-6");
+
+Console.WriteLine("Selected step: 1e-3\n");
+// Selected step 1e-3 because in small steps, time is negligible.
+
+Console.WriteLine($"Best avarage execution time of multiflow method: {TheBestResultTimeMultiFlow}, number of flows: {TheBestNumberOfFlows}");
+Console.WriteLine($"Average execution time of a single-flow method: {ResultOfSingleFlow}");
+
+if (TheBestResultTimeMultiFlow <= ResultOfSingleFlow)
+{
+    double res = Convert.ToDouble(ResultOfSingleFlow - TheBestResultTimeMultiFlow) / Convert.ToDouble(ResultOfSingleFlow) * 100;
+    Console.WriteLine($"The multiflow method is {res}% faster then the single-flow method");
+}
+else
+{
+    double res = Convert.ToDouble(TheBestResultTimeMultiFlow - ResultOfSingleFlow) / Convert.ToDouble(TheBestResultTimeMultiFlow) * 100;
+    Console.WriteLine($"The multifsingle-flow method is {res}% faster then the multiflow method");
+}
