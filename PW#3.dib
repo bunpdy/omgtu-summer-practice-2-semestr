@@ -52,7 +52,7 @@ class DefiniteIntegral
 
 #!csharp
 
-#r "nuget: xunit, 2.8.1"
+// #r "nuget: xunit, 2.8.1"
 
 using Xunit;
 
@@ -64,3 +64,58 @@ Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, X, 1e-4, 2), 1e-4);
 Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, SIN, 1e-5, 8), 1e-4);
 
 Assert.Equal(10, DefiniteIntegral.Solve(0, 5, X, 1e-6, 8), 1e-5);
+
+#!csharp
+
+// #r "nuget: xunit, 2.8.1"
+
+using System;
+using System.Threading;
+using Xunit;
+
+var X = (double x) => x;
+var SIN = (double x) => Math.Sin(x);
+
+class DefiniteIntegral
+{
+    public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
+    {
+        Thread[] threads = new Thread[threadsnumber];
+
+        double summ = 0.0;
+        double PartOfFlow = (b - a) / threadsnumber;
+
+        for (int j = 0; j < threadsnumber; j++)
+        {
+            int localJ = j;
+            threads[j] = new Thread (delegate ()
+            {
+                double initialValue, computedValue, area;
+                for (double i = (a + (localJ * PartOfFlow))/step; i < (a + ((localJ + 1) * PartOfFlow))/step; i++)
+                {
+                    area = ((function(i*step) + function((i + 1)*step)) / 2) * step;
+                    do
+                    {
+                        initialValue = summ;
+                        computedValue = initialValue + area;
+                    } while (Interlocked.CompareExchange(ref summ, computedValue, initialValue) != initialValue);
+                }
+            });
+        }
+        for (int i = 0; i < threadsnumber; i++)
+        {
+            threads[i].Start();
+        }
+        for (int i = 0; i < threadsnumber; i++)
+        {
+            threads[i].Join();
+        }
+        return summ;
+    }
+}
+
+Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, X, 1e-4, 2), 1e-4);
+
+Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, SIN, 1e-5, 8), 1e-4);
+
+Assert.Equal(50, DefiniteIntegral.Solve(0, 10, X, 1e-6, 8), 1e-5);
