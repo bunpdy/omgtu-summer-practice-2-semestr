@@ -65,30 +65,56 @@ var queue2 = new BlockingCollection<Message>(2); //очередь второго
 Message message1 = new Message();
 queue2.Add(message1);
 
+int count1 = queue1.Count;
+int count2 = queue2.Count;
+
 void ReadQueue1(BlockingCollection<Message> queue)
 {
-    for (int i = 0; i < 100; i++)
+    while (!queue1.IsCompleted)
     {
-        Message exited = queue.Take();
-        exited.Handle();
-        
-        Message ObjectForThread2 = new Message();
-        queue2.Add(ObjectForThread2);
-    }       
-    queue2.CompleteAdding();
+        try
+        {
+            Message exited = queue.Take();
+            exited.Handle();
+        }
+        catch (InvalidOperationException) { }
+
+        if (count2 >= 100)
+        {
+            queue2.CompleteAdding();
+        }
+        else
+        {
+            Message ObjectForThread2 = new Message();
+            queue2.Add(ObjectForThread2);
+            Interlocked.Increment(ref count2);
+        }
+
+    }
 }
 
 void ReadQueue2(BlockingCollection<Message> queue)
 {
-    for (int i = 0; i < 100; i++)
+    while (!queue2.IsCompleted)
     {
-        Message exited = queue.Take();
-        exited.Handle();
-        
-        Message ObjectForThread1 = new Message();
-        queue1.Add(ObjectForThread1);
-    }       
-    queue1.CompleteAdding();
+        try
+        {
+            Message exited = queue.Take();
+            exited.Handle();
+        }
+        catch (InvalidOperationException) { }
+
+        if (count1 >= 100)
+        {
+            queue1.CompleteAdding();
+        }
+        else
+        {
+            Message ObjectForThread1 = new Message();
+            queue1.Add(ObjectForThread1);
+            Interlocked.Increment(ref count1);
+        }
+    }
 }
 
 Thread thread1 = new Thread(() => ReadQueue1(queue1));
@@ -99,9 +125,6 @@ thread2.Start();
 
 thread1.Join();
 thread2.Join();
-
-Message z = (queue1.Count > 0) ? queue1.Take() : queue2.Take(); 
-// Delete an item added before the thread starts 
 
 #!csharp
 
